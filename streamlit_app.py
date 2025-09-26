@@ -80,9 +80,6 @@ if "current_stats" not in st.session_state:
     st.session_state.history       = []   # 最新が先頭
     st.session_state.favorites     = []
 
-    # 履歴レコードの安定ID
-    st.session_state._hid_counter  = 0
-
     # 自動お気に入り設定（min/max をまとめて持つ）
     st.session_state.auto_fav_enabled = True
     st.session_state.auto_fav_mode    = "AND"
@@ -90,7 +87,7 @@ if "current_stats" not in st.session_state:
     st.session_state.auto_max         = {k: None for k in ALL_KEYS_FOR_RULE}
 
     st.session_state.history_max_keep = 20
-    st.session_state.add_roll_to_history = True  # 全能力ロールを履歴へ
+    st.session_state.add_roll_to_history = True  # 全体ロールを履歴へ
 
 # =========================
 # ヘッダ & グローバル設定
@@ -114,7 +111,6 @@ def make_record(finals: Dict[str, int],
                 detail: Dict[str, List[int]],
                 adds: Dict[str, int]) -> Dict[str, Any]:
     rec = {
-        "hid": st.session_state._hid_counter,  # 安定ID
         **finals,
         "TOTAL": total_score(finals),
         **derived_stats(finals),
@@ -122,7 +118,6 @@ def make_record(finals: Dict[str, int],
         "_mods": dict(st.session_state.modifiers),
         "_apply_mod": apply_mod,
     }
-    st.session_state._hid_counter += 1
     return rec
 
 def auto_fav_ok(rec: Dict[str, Any]) -> bool:
@@ -151,13 +146,6 @@ def history_append(rec: Dict[str, Any]):
     # 自動お気に入り
     if auto_fav_ok(rec):
         st.session_state.favorites.insert(0, rec)
-
-def find_history_by_hid(hid: int) -> Dict[str, Any]:
-    for r in st.session_state.history:
-        if r.get("hid") == hid:
-            return r
-    # 見つからなければ先頭（フォールバック）
-    return st.session_state.history[0] if st.session_state.history else {}
 
 # =========================
 # サイドバー：まとめて振る（履歴へ）
@@ -212,7 +200,9 @@ with st.sidebar:
         st.session_state.auto_max[k] = hi
 
     # その場処理で確実に動作
+    # その場処理で確実に動作（置き換え版）
     if st.button("まとめて振る（履歴に追加）", use_container_width=True):
+        newrecs = []
         for _ in range(int(n_sets)):
             base_vals, finals, detail, adds = {}, {}, {}, {}
             for abil in ABILS:
@@ -226,11 +216,28 @@ with st.sidebar:
                 adds[abil] = add
                 finals[abil] = make_final(abil, base)
             rec = make_record(finals, base_vals, detail, adds)
-            history_append(rec)
-        st.success(f"{int(n_sets)} セットを履歴に追加しました。")
+            newrecs.append(rec)
+
+        # 履歴に“一括で前置”
+        st.session_state.history = newrecs + st.session_state.history
+
+        # 最大件数で切り詰め
+        maxk = int(st.session_state.history_max_keep)
+        if len(st.session_state.history) > maxk:
+            st.session_state.history = st.session_state.history[:maxk]
+
+        # 自動お気に入り（新規分にだけ判定）
+        added_fav = 0
+        for rec in newrecs:
+            if auto_fav_ok(rec):
+                st.session_state.favorites.insert(0, rec)
+                added_fav += 1
+
+        st.success(f"{len(newrecs)} セットを履歴に追加しました（★ {added_fav} 件）。")
+
 
 # =========================
-# 全能力を振る（履歴保存オプションあり）
+# 全体振り / 全体振り直し（履歴保存オプションあり）
 # =========================
 def roll_all_into_current(save_to_history: bool):
     base_vals, finals, detail, adds = {}, {}, {}, {}
@@ -255,6 +262,7 @@ def roll_all_into_current(save_to_history: bool):
         rec = make_record(finals, base_vals, detail, adds)
         history_append(rec)
 
+# 変更後（b2を削除してレイアウト調整）
 b1, b3 = st.columns([1,2])
 with b1:
     if st.button("🎲 全能力を振る", use_container_width=True):
@@ -262,6 +270,7 @@ with b1:
         st.success("現在セットを新規ロールしました。")
 with b3:
     st.caption("固定あり→固定値／固定なし→ダイス。履歴保存はトグルでON/OFF。最終値はモディファイア設定に従う。")
+
 
 st.markdown("---")
 
@@ -310,32 +319,7 @@ with cols[-1]:
 st.markdown("---")
 
 # =========================
-# 派生ステータス（← ここをスワップより先に表示）
-# =========================
-st.subheader("派生ステータス")
-finals_now = {a: st.session_state.current_stats[a] for a in ABILS}
-deriv = derived_stats(finals_now)
-db = damage_bonus(finals_now["STR"], finals_now["SIZ"])
-
-cA, cB, cC, cD = st.columns(4)
-with cA:
-    st.metric("HP", deriv["HP"])
-    st.metric("MP", deriv["MP"])
-with cB:
-    st.metric("SAN", deriv["SAN"])
-    st.metric("幸運", deriv["幸運"])
-with cC:
-    st.metric("アイデア", deriv["アイデア"])
-    st.metric("知識", deriv["知識"])
-with cD:
-    st.metric("職業P", deriv["職業P"])
-    st.metric("興味P", deriv["興味P"])
-st.info(f"ダメージボーナス（STR+SIZ={finals_now['STR']+finals_now['SIZ']}）：**{db}**")
-
-st.markdown("---")
-
-# =========================
-# 出目入れ替え（スワップ） / xポイント移動（← 派生の後に移動）
+# 出目入れ替え（スワップ） / xポイント移動（能力一覧の直後）
 # =========================
 st.subheader("出目入れ替え（スワップ） / xポイント移動")
 
@@ -386,6 +370,31 @@ if warns:
 st.markdown("---")
 
 # =========================
+# 派生ステータス（ここに移動）
+# =========================
+st.subheader("派生ステータス")
+finals_now = {a: st.session_state.current_stats[a] for a in ABILS}
+deriv = derived_stats(finals_now)
+db = damage_bonus(finals_now["STR"], finals_now["SIZ"])
+
+cA, cB, cC, cD = st.columns(4)
+with cA:
+    st.metric("HP", deriv["HP"])
+    st.metric("MP", deriv["MP"])
+with cB:
+    st.metric("SAN", deriv["SAN"])
+    st.metric("幸運", deriv["幸運"])
+with cC:
+    st.metric("アイデア", deriv["アイデア"])
+    st.metric("知識", deriv["知識"])
+with cD:
+    st.metric("職業P", deriv["職業P"])
+    st.metric("興味P", deriv["興味P"])
+st.info(f"ダメージボーナス（STR+SIZ={finals_now['STR']+finals_now['SIZ']}）：**{db}**")
+
+st.markdown("---")
+
+# =========================
 # 履歴（並べ替え・採用・★チェック）
 # =========================
 with st.expander("履歴（並べ替え・採用・★チェック）", expanded=False):
@@ -394,24 +403,26 @@ with st.expander("履歴（並べ替え・採用・★チェック）", expanded
         ascending = st.toggle("昇順", value=False, key="hist_asc")
 
         df_hist = pd.DataFrame(st.session_state.history)
-        df_hist = df_hist.sort_values(by=sort_key, ascending=ascending, ignore_index=True)
-        # 安定ID（hid）で原本を参照
-        df_view = df_hist[["hid"] + ABILS + ["TOTAL"] + DERIVED_KEYS].copy()
+        df_hist = df_hist.sort_values(by=sort_key, ascending=ascending).reset_index(drop=True)
+        # 行ID（元 history のインデックス）を保持してマッピングのズレを防ぐ
+        df_hist["hid_idx"] = df_hist.index
+
+        df_view = df_hist[["hid_idx"] + ABILS + ["TOTAL"] + DERIVED_KEYS].copy()
         df_view.insert(0, "★", False)  # チェック列
 
         edited = st.data_editor(
             df_view,
             use_container_width=True,
             height=380,
-            column_config={"hid": st.column_config.NumberColumn("ID", disabled=True)},
+            column_config={"hid_idx": st.column_config.NumberColumn("ID", disabled=True)},
             key="hist_editor"
         )
 
         # 採用
-        sel_hid = st.number_input("採用 ID（上表のID）", min_value=0, value=int(df_view["hid"].min()), step=1)
+        idx = st.number_input("採用 ID（上表のID）", min_value=0, max_value=int(df_hist["hid_idx"].max()), value=0, step=1)
         def adopt(hid: int):
-            target = find_history_by_hid(hid)
-            if not target: return
+            # 並べ替え後でもIDで history を参照できるように
+            target = st.session_state.history[hid]
             finals = {a: int(target[a]) for a in ABILS}
             basev  = target.get("_base", {a: finals[a] - (target.get("_mods", {}).get(a, 0) if target.get("_apply_mod", True) else 0) for a in ABILS})
             st.session_state.current_stats  = finals
@@ -422,72 +433,24 @@ with st.expander("履歴（並べ替え・採用・★チェック）", expanded
         cH1, cH2 = st.columns(2)
         with cH1:
             if st.button("このIDを現在セットに採用", use_container_width=True):
-                adopt(int(sel_hid))
+                adopt(int(idx))
         with cH2:
             if st.button("チェック行を★に追加", use_container_width=True):
+                # ★列 True の行を favorites へ（ID経由でhistoryから取り出す）
                 added = 0
                 for _, row in edited.iterrows():
                     if bool(row["★"]):
-                        hid = int(row["hid"])
-                        rec = find_history_by_hid(hid)
-                        if rec:
-                            st.session_state.favorites.insert(0, rec)
-                            added += 1
+                        hid = int(row["hid_idx"])
+                        st.session_state.favorites.insert(0, st.session_state.history[hid])
+                        added += 1
                 st.success(f"★に追加：{added} 件")
     else:
         st.info("履歴は空です。サイドバーや上部ボタンでロールしてください。")
 
 # =========================
-# お気に入り（★）— インポート/エクスポート対応
+# お気に入り（★）
 # =========================
 st.subheader("お気に入り（★）")
-
-# --- インポート ---
-with st.expander("★ インポート（CSV/JSON）", expanded=False):
-    up = st.file_uploader("CSV もしくは JSON を選択", type=["csv", "json"])
-    if up is not None:
-        try:
-            if up.name.lower().endswith(".json"):
-                data = pd.read_json(up).to_dict(orient="records") if up.type == "application/json" else \
-                       pd.read_json(up).to_dict(orient="records")
-                # JSONは「レコード配列」を想定
-                for rec in data:
-                    # 必須: ABILS を埋める
-                    finals = {a: int(rec.get(a, 0)) for a in ABILS}
-                    out = {
-                        **finals,
-                        "TOTAL": rec.get("TOTAL", total_score(finals)),
-                        **derived_stats(finals),
-                        "_base": rec.get("_base", finals.copy()),
-                        "_detail": rec.get("_detail", {a: [] for a in ABILS}),
-                        "_adds": rec.get("_adds", {a: 0 for a in ABILS}),
-                        "_mods": rec.get("_mods", {a: 0 for a in ABILS}),
-                        "_apply_mod": bool(rec.get("_apply_mod", True)),
-                    }
-                    # hid は重複防止のため付けない（お気に入りでは不要）
-                    st.session_state.favorites.insert(0, out)
-                st.success(f"JSON から {len(data)} 件インポートしました。")
-            else:
-                df = pd.read_csv(up)
-                cnt = 0
-                for _, row in df.iterrows():
-                    finals = {a: int(row.get(a, 0)) for a in ABILS}
-                    out = {
-                        **finals,
-                        "TOTAL": int(row.get("TOTAL", total_score(finals))),
-                        **derived_stats(finals),
-                        "_base": finals.copy(),
-                        "_detail": {a: [] for a in ABILS},
-                        "_adds": {a: 0 for a in ABILS},
-                        "_mods": {a: 0 for a in ABILS},
-                        "_apply_mod": True,
-                    }
-                    st.session_state.favorites.insert(0, out); cnt += 1
-                st.success(f"CSV から {cnt} 件インポートしました。")
-        except Exception as e:
-            st.error(f"インポート失敗: {e}")
-
-# --- 一覧 & エクスポート ---
 if st.session_state.favorites:
     df_fav = pd.DataFrame(st.session_state.favorites)
     st.dataframe(df_fav[ABILS + ["TOTAL"] + DERIVED_KEYS], use_container_width=True, height=260)
@@ -499,18 +462,10 @@ if st.session_state.favorites:
             row.update({k: rec.get(k) for k in ["TOTAL"] + DERIVED_KEYS})
             rows.append(row)
         return pd.DataFrame(rows) if rows else pd.DataFrame()
-
-    # エクスポート（CSV/JSON）
     csv_bytes = fav_df_csv().to_csv(index=False).encode("utf-8")
     st.download_button("★ をCSVでダウンロード", data=csv_bytes, file_name="coc6_favorites.csv",
                        mime="text/csv", use_container_width=True)
 
-    import json
-    json_bytes = json.dumps(st.session_state.favorites, ensure_ascii=False, indent=2).encode("utf-8")
-    st.download_button("★ をJSONでダウンロード", data=json_bytes, file_name="coc6_favorites.json",
-                       mime="application/json", use_container_width=True)
-
-    # 削除系
     del_idx = st.number_input("★ 削除 index", min_value=0, max_value=len(st.session_state.favorites)-1, value=0, step=1, key="fav_del_idx")
     cF1, cF2 = st.columns(2)
     with cF1:
