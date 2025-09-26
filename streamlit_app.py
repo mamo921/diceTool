@@ -199,8 +199,7 @@ with st.sidebar:
         st.session_state.auto_min[k] = lo
         st.session_state.auto_max[k] = hi
 
-    # その場処理で確実に動作
-    # その場処理で確実に動作（置き換え版）
+    # --- サイドバー「まとめて振る（履歴に追加）」の処理を丸ごと差し替え ---
     if st.button("まとめて振る（履歴に追加）", use_container_width=True):
         newrecs = []
         for _ in range(int(n_sets)):
@@ -218,27 +217,23 @@ with st.sidebar:
             rec = make_record(finals, base_vals, detail, adds)
             newrecs.append(rec)
 
-        # 履歴に“一括で前置”
-        st.session_state.history = newrecs + st.session_state.history
-
-        # 最大件数で切り詰め
-        maxk = int(st.session_state.history_max_keep)
+        # 履歴に “その場で前置” してから一度だけ切り詰め
+        st.session_state.history[:0] = newrecs
+        maxk = max(5, int(st.session_state.history_max_keep))
         if len(st.session_state.history) > maxk:
-            st.session_state.history = st.session_state.history[:maxk]
+            del st.session_state.history[maxk:]
 
-        # 自動お気に入り（新規分にだけ判定）
-        added_fav = 0
-        for rec in newrecs:
-            if auto_fav_ok(rec):
-                st.session_state.favorites.insert(0, rec)
-                added_fav += 1
+        # 自動お気に入りは新規分のみ判定 → まとめて前置
+        favs = [r for r in newrecs if auto_fav_ok(r)]
+        if favs:
+            st.session_state.favorites[:0] = favs
 
-        st.success(f"{len(newrecs)} セットを履歴に追加しました（★ {added_fav} 件）。")
-
+        st.success(f"{len(newrecs)} セットを履歴に追加しました（★ {len(favs)} 件）")
 
 # =========================
 # 全体振り / 全体振り直し（履歴保存オプションあり）
 # =========================
+# --- 「🎲 全能力を振る」で履歴へ保存する部分も、in-place で前置 & 切り詰めに変更 ---
 def roll_all_into_current(save_to_history: bool):
     base_vals, finals, detail, adds = {}, {}, {}, {}
     for abil in ABILS:
@@ -260,7 +255,13 @@ def roll_all_into_current(save_to_history: bool):
 
     if save_to_history:
         rec = make_record(finals, base_vals, detail, adds)
-        history_append(rec)
+        # ← ここを in-place 前置に
+        st.session_state.history.insert(0, rec)
+        maxk = max(5, int(st.session_state.history_max_keep))
+        if len(st.session_state.history) > maxk:
+            del st.session_state.history[maxk:]
+        if auto_fav_ok(rec):
+            st.session_state.favorites.insert(0, rec)
 
 # 変更後（b2を削除してレイアウト調整）
 b1, b3 = st.columns([1,2])
