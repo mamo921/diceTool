@@ -479,3 +479,6 @@ if st.session_state.favorites:
             st.success("★ を空にしました。")
 else:
     st.info("★ は空です。履歴からチェック追加するか、自動お気に入りを使ってね。")
+
+# --- 履歴セクションの先頭など、件数のデバッグ表示を足すと確認しやすい（任意） ---
+st.caption(f"履歴件数: {len(st.session_state.history)} / お気に入り件数: {len(st.session_state.favorites)}")
