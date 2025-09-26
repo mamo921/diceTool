@@ -76,22 +76,27 @@ PREFECTURES = [
     "奈良","和歌山","鳥取","島根","岡山","広島","山口","徳島","香川","愛媛","高知","福岡","佐賀","長崎",
     "熊本","大分","宮崎","鹿児島","沖縄"
 ]
-WORLD_COUNTRIES = [
-    "United States","United Kingdom","Canada","Australia","New Zealand","Germany","France","Italy","Spain","Portugal",
-    "Netherlands","Belgium","Sweden","Norway","Denmark","Finland","Poland","Czech Republic","Austria","Switzerland",
-    "Ireland","Greece","Hungary","Romania","Bulgaria","Serbia","Croatia","Slovakia","Slovenia","Ukraine",
-    "Russia","Turkey","Saudi Arabia","UAE","Qatar","India","Pakistan","Bangladesh","Sri Lanka","Nepal",
-    "China","Taiwan","South Korea","Thailand","Vietnam","Malaysia","Singapore","Indonesia","Philippines","Mexico",
-    "Brazil","Argentina","Chile","Peru","Colombia","South Africa","Egypt","Kenya","Nigeria","Morocco"
+WORLD_COUNTRIES_JA = [
+    "アメリカ合衆国","イギリス","カナダ","オーストラリア","ニュージーランド","ドイツ","フランス","イタリア","スペイン","ポルトガル",
+    "オランダ","ベルギー","スウェーデン","ノルウェー","デンマーク","フィンランド","ポーランド","チェコ","オーストリア","スイス",
+    "アイルランド","ギリシャ","ハンガリー","ルーマニア","ブルガリア","セルビア","クロアチア","スロバキア","スロベニア","ウクライナ",
+    "ロシア","トルコ","サウジアラビア","アラブ首長国連邦","カタール","インド","パキスタン","バングラデシュ","スリランカ","ネパール",
+    "中国","台湾","韓国","タイ","ベトナム","マレーシア","シンガポール","インドネシア","フィリピン","メキシコ",
+    "ブラジル","アルゼンチン","チリ","ペルー","コロンビア","南アフリカ","エジプト","ケニア","ナイジェリア","モロッコ"
 ]
+# 世界の名前（日本語表記・任意生成用）
+WORLD_SURNAME_JA = ["スミス","ジョンソン","ウィリアムズ","ブラウン","ジョーンズ","ガルシア","ミラー","デイビス","ウィルソン","テイラー"]
+WORLD_GIVEN_M_JA = ["ジェームズ","ジョン","ロバート","マイケル","ウィリアム","デイビッド","ジョセフ","ダニエル","ヘンリー","ルーカス"]
+WORLD_GIVEN_F_JA = ["メアリー","パトリシア","リンダ","ジェニファー","エリザベス","ソフィア","オリビア","エミリー","エイヴァ","ミア"]
+
 JOBS_JP = [
     "学生","会社員","公務員","教員","エンジニア","研究者","医師","看護師","弁護士","警察官","自営業",
     "農家","漁師","記者","作家","芸術家","俳優","ミュージシャン","料理人","探偵","通訳","パイロット","整備士"
 ]
-JOBS_WORLD = [
-    "Student","Office worker","Civil servant","Teacher","Engineer","Scientist","Doctor","Nurse","Lawyer","Police officer",
-    "Entrepreneur","Farmer","Fisher","Journalist","Writer","Artist","Actor","Musician","Chef","Detective","Interpreter",
-    "Pilot","Mechanic"
+JOBS_WORLD_JA = [
+    "学生","オフィスワーカー","公務員","教師","エンジニア","科学者","医師","看護師","弁護士","警察官",
+    "起業家","農家","漁師","ジャーナリスト","作家","アーティスト","俳優","ミュージシャン","シェフ","探偵","通訳",
+    "パイロット","整備士"
 ]
 
 def random_date(ymin: int, ymax: int) -> date:
@@ -101,8 +106,12 @@ def random_date(ymin: int, ymax: int) -> date:
     return start + timedelta(days=random.randint(0, delta))
 
 # =========================
-# セッション初期化（1度だけ）
+# セッション初期化（1度だけ＆堅牢）
 # =========================
+def ensure(key: str, default):
+    if key not in st.session_state:
+        st.session_state[key] = default
+
 if "app_bootstrap_done" not in st.session_state:
     # タブ1（能力値）
     st.session_state.current_stats  = {a: 0 for a in ABILS}
@@ -121,14 +130,25 @@ if "app_bootstrap_done" not in st.session_state:
     st.session_state.add_roll_to_history= True
 
     # タブ2（プロフィール）
-    st.session_state.profile_history = []
+    st.session_state.profile_history = []      # 履歴
+    st.session_state.current_profile = {       # 個別ロールの作業領域
+        "出身地/国": "",
+        "性別": "",
+        "誕生日": "",
+        "職業": "",
+        "（任意）名前": ""
+    }
 
     st.session_state.app_bootstrap_done = True
+
+# 念のため堅牢化（中断復帰時のAttributeError予防）
+ensure("profile_history", [])
+ensure("current_profile", {"出身地/国":"", "性別":"", "誕生日":"", "職業":"", "（任意）名前":""})
 
 # =========================
 # タブ
 # =========================
-tab1, tab2 = st.tabs(["🧮 能力値ツール", "🪪 プロフィール生成"])
+tab1, tab2 = st.tabs(["🧮 能力値ツール", "🪪 プロフィール生成（個別ロール対応）"])
 
 # =========================
 # タブ1：能力値ツール
@@ -249,7 +269,7 @@ with tab1:
             "下限": [st.session_state.auto_min[k] or 0 for k in ALL_KEYS_FOR_RULE],
             "上限": [st.session_state.auto_max[k] or 0 for k in ALL_KEYS_FOR_RULE],
         })
-        edited_cond = st.data_editor(cond_df, use_container_width=True, num_rows="固定", key="auto_cond_table")
+        edited_cond = st.data_editor(cond_df, use_container_width=True, num_rows="fixed", key="auto_cond_table")
         for _, row in edited_cond.iterrows():
             k = row["項目"]
             lo = int(row["下限"]) if int(row["下限"]) != 0 else None
@@ -485,67 +505,104 @@ with tab1:
 
 
 # =========================
-# タブ2：プロフィール生成（出身地・性別・誕生日・職業）
+# タブ2：プロフィール生成（個別ロール）
 # =========================
 with tab2:
-    st.title("プロフィール生成（出身地・性別・誕生日・職業）")
+    st.title("プロフィール生成（個別ロール）")
 
-    colA, colB, colC = st.columns([1,1,2])
+    # 左：モード / 右：生年レンジ
+    colA, colB = st.columns([1,2])
     with colA:
-        mode = st.radio("国籍モード", ["日本版","世界版"], horizontal=True)
+        prof_mode = st.radio("モード", ["日本版（都道府県）","世界版（出身国）"], horizontal=False)
     with colB:
-        n_profiles = st.number_input("生成数", min_value=1, max_value=50, value=1, step=1)
-    with colC:
-        year_min, year_max = st.slider("生年レンジ", min_value=1900, max_value=date.today().year,
+        year_min, year_max = st.slider("誕生日の生年レンジ", min_value=1900, max_value=date.today().year,
                                        value=(1990, 2005), step=1)
 
-    colD, colE = st.columns(2)
+    colC, colD = st.columns([1,1])
+    with colC:
+        gender_opt = st.selectbox("性別（個別ロール時の既定）", ["ランダム","男","女","その他"])
     with colD:
-        gender_opt = st.selectbox("性別", ["ランダム","男","女","その他"])
-    with colE:
-        job_mode = st.selectbox("職業セット", ["日本の職業リスト","世界の職業リスト"])
+        name_enabled = st.checkbox("（世界版のみ）名前も生成（日本語表記）", value=False)
 
-    def gen_profiles(n: int) -> List[Dict[str, Any]]:
-        res = []
-        for _ in range(n):
-            # 性別
-            g = random.choice(["男","女","その他"]) if gender_opt == "ランダム" else gender_opt
-            # 誕生日
-            bd = random_date(int(year_min), int(year_max)).isoformat()
-            # 出身地
-            if mode == "日本版":
-                birthplace = random.choice(PREFECTURES)
-            else:
-                birthplace = random.choice(WORLD_COUNTRIES)
-            # 職業
-            if job_mode == "日本の職業リスト":
-                job = random.choice(JOBS_JP)
-            else:
-                job = random.choice(JOBS_WORLD)
-            res.append({
-                "出身地": birthplace,
-                "性別": g,
-                "誕生日": bd,
-                "職業": job,
-            })
-        return res
+    # ---- 個別ロール関数 ----
+    def roll_birthplace(mode: str) -> str:
+        if mode.startswith("日本版"):
+            return random.choice(PREFECTURES)
+        else:
+            return random.choice(WORLD_COUNTRIES_JA)
 
-    c1, c2, c3 = st.columns([1,1,2])
+    def roll_gender() -> str:
+        return random.choice(["男","女","その他"]) if gender_opt == "ランダム" else gender_opt
+
+    def roll_birthday() -> str:
+        return random_date(int(year_min), int(year_max)).isoformat()
+
+    def roll_job(mode: str) -> str:
+        return random.choice(JOBS_JP if mode.startswith("日本版") else JOBS_WORLD_JA)
+
+    def roll_world_name_ja(gender: str) -> str:
+        if gender == "女":
+            given = random.choice(WORLD_GIVEN_F_JA)
+        elif gender == "男":
+            given = random.choice(WORLD_GIVEN_M_JA)
+        else:
+            given = random.choice(WORLD_GIVEN_M_JA + WORLD_GIVEN_F_JA)
+        surname = random.choice(WORLD_SURNAME_JA)
+        return f"{surname} {given}"
+
+    # ---- 個別ロールボタン ----
+    st.subheader("個別にロール")
+    c1, c2, c3, c4, c5 = st.columns([1,1,1,1,1])
     with c1:
-        if st.button("🪄 プロフィールを振る", use_container_width=True):
-            newrows = gen_profiles(int(n_profiles))
-            st.session_state.profile_history[:0] = newrows
-            st.success(f"{len(newrows)}件 生成しました。")
+        if st.button("🎌/🌍 出身地/国を振る", use_container_width=True):
+            st.session_state.current_profile["出身地/国"] = roll_birthplace(prof_mode)
     with c2:
-        if st.button("🧹 履歴クリア", use_container_width=True):
-            st.session_state.profile_history.clear()
-            st.info("プロフィール履歴をクリアしました。")
+        if st.button("🚻 性別を振る", use_container_width=True):
+            st.session_state.current_profile["性別"] = roll_gender()
     with c3:
-        st.caption("※ 生年レンジ／性別／職業リスト／国籍モードを設定してから振ってね。")
+        if st.button("🎂 誕生日を振る", use_container_width=True):
+            st.session_state.current_profile["誕生日"] = roll_birthday()
+    with c4:
+        if st.button("💼 職業を振る", use_container_width=True):
+            st.session_state.current_profile["職業"] = roll_job(prof_mode)
+    with c5:
+        if st.button("🆔 名前（世界版のみ）", use_container_width=True):
+            if name_enabled and prof_mode.startswith("世界版"):
+                g = st.session_state.current_profile["性別"] or roll_gender()
+                st.session_state.current_profile["（任意）名前"] = roll_world_name_ja(g)
+            else:
+                st.warning("チェック『名前も生成』をON、かつモードを世界版にしてください。")
 
+    # ---- 現在の編集中プロフィール表示 ----
+    st.markdown("---")
+    st.subheader("現在のプロフィール（編集中）")
+    cp = st.session_state.current_profile
+    cL, cR = st.columns([2,2])
+    with cL:
+        st.metric("出身地/国", cp.get("出身地/国","") or "（未設定）")
+        st.metric("性別", cp.get("性別","") or "（未設定）")
+    with cR:
+        st.metric("誕生日", cp.get("誕生日","") or "（未設定）")
+        st.metric("職業", cp.get("職業","") or "（未設定）")
+    if name_enabled and cp.get("（任意）名前"):
+        st.info(f"名前（参考）: {cp['（任意）名前']}")
+
+    # ---- 保存/クリア ----
+    cS1, cS2, cS3 = st.columns([1,1,2])
+    with cS1:
+        if st.button("📝 履歴に追加", use_container_width=True):
+            st.session_state.profile_history.insert(0, dict(cp))  # コピーして保存
+            st.success("プロフィールを履歴に追加しました。")
+    with cS2:
+        if st.button("🧹 編集中をクリア", use_container_width=True):
+            st.session_state.current_profile = {"出身地/国":"","性別":"","誕生日":"","職業":"","（任意）名前":""}
+            st.info("編集中プロフィールをクリアしました。")
+    with cS3:
+        st.caption("※ 出身地/国だけ振って保存もOK。他の項目は空のままでも保存できます。")
+
+    # ---- 履歴 ----
     st.markdown("---")
     st.subheader("プロフィール履歴")
-
     if st.session_state.profile_history:
         dfp = pd.DataFrame(st.session_state.profile_history)
         st.dataframe(dfp, use_container_width=True, height=360)
@@ -558,5 +615,10 @@ with tab2:
         json_bytes = json.dumps(st.session_state.profile_history, ensure_ascii=False, indent=2).encode("utf-8")
         st.download_button("JSONでダウンロード", data=json_bytes, file_name="profiles.json",
                            mime="application/json", use_container_width=True)
+
+        # 履歴クリア
+        if st.button("🗑 履歴を全削除", use_container_width=True, type="secondary"):
+            st.session_state.profile_history.clear()
+            st.success("プロフィール履歴を空にしました。")
     else:
-        st.info("まだプロフィールはありません。『🪄 プロフィールを振る』を押してね。")
+        st.info("まだプロフィールはありません。上の『出身地/国を振る』→『履歴に追加』で保存できます。")
