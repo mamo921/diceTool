@@ -66,28 +66,32 @@ def total_score(stats: Dict[str, int]) -> int:
     return sum(stats[a] for a in ABILS)
 
 # =========================
-# セッション初期化
+# セッション初期化（1度だけ）
 # =========================
-if "current_stats" not in st.session_state:
-    st.session_state.current_stats = {a: 0 for a in ABILS}     # 最終値（mod適用後/無効時は素のまま）
-    st.session_state.current_base  = {a: 0 for a in ABILS}     # 素の合計（出目合計+固定加算）
-    st.session_state.current_detail= {a: [] for a in ABILS}    # 出目配列
-    st.session_state.current_add   = {a: 0 for a in ABILS}     # 固定加算
+if "app_bootstrap_done" not in st.session_state:
+    st.session_state.current_stats  = {a: 0 for a in ABILS}
+    st.session_state.current_base   = {a: 0 for a in ABILS}
+    st.session_state.current_detail = {a: [] for a in ABILS}
+    st.session_state.current_add    = {a: 0 for a in ABILS}
 
-    st.session_state.modifiers     = {a: 0 for a in ABILS}
-    st.session_state.fixed_values  = {a: None for a in ABILS}
+    st.session_state.modifiers      = {a: 0 for a in ABILS}
+    st.session_state.fixed_values   = {a: None for a in ABILS}
 
-    st.session_state.history       = []   # 最新が先頭
-    st.session_state.favorites     = []
+    st.session_state.history        = []       # 履歴
+    st.session_state.favorites      = []       # ★
+    st.session_state._hid_counter   = 0        # 安定ID
 
-    # 自動お気に入り設定（min/max をまとめて持つ）
+    # 自動★
     st.session_state.auto_fav_enabled = True
     st.session_state.auto_fav_mode    = "AND"
     st.session_state.auto_min         = {k: None for k in ALL_KEYS_FOR_RULE}
     st.session_state.auto_max         = {k: None for k in ALL_KEYS_FOR_RULE}
 
-    st.session_state.history_max_keep = 20
-    st.session_state.add_roll_to_history = True  # 全体ロールを履歴へ
+    # 設定
+    st.session_state.history_max_keep   = 20
+    st.session_state.add_roll_to_history= True
+
+    st.session_state.app_bootstrap_done = True  # ← フラグ
 
 # =========================
 # ヘッダ & グローバル設定
@@ -147,32 +151,63 @@ def history_append(rec: Dict[str, Any]):
     if auto_fav_ok(rec):
         st.session_state.favorites.insert(0, rec)
 
-# =========================
-# サイドバー：まとめて振る（履歴へ）
-# =========================
 with st.sidebar:
     st.title("操作パネル")
 
-    st.subheader("まとめて振る（履歴に追加）")
-    n_sets = st.number_input("セット数（最大5）", min_value=1, max_value=5, value=1, step=1)
+    # ---- フォーム：まとめて振る（固定/モディファイア込みで一括送信）----
+    with st.form("batch_roll_form", clear_on_submit=False):
+        st.subheader("まとめて振る（履歴に追加）")
+        n_sets = st.number_input("セット数（最大5）", min_value=1, max_value=5, value=1, step=1, key="batch_n_sets")
 
-    st.markdown("**固定値の指定**（空=未指定）")
-    cols_fix = st.columns(4)
-    for i, abil in enumerate(ABILS):
-        with cols_fix[i % 4]:
-            v = st.number_input(f"{abil} 固定", min_value=0, max_value=99,
-                                value=st.session_state.fixed_values[abil] or 0, step=1, key=f"fix_{abil}")
-            st.session_state.fixed_values[abil] = v if v != 0 else None
+        st.markdown("**固定値の指定**（空=未指定）")
+        cols_fix = st.columns(4)
+        for i, abil in enumerate(ABILS):
+            with cols_fix[i % 4]:
+                v = st.number_input(f"{abil} 固定", min_value=0, max_value=99,
+                                    value=st.session_state.fixed_values[abil] or 0, step=1, key=f"fix_{abil}")
+                st.session_state.fixed_values[abil] = v if v != 0 else None
 
-    st.markdown("**モディファイア（±）**")
-    cols_mod = st.columns(4)
-    for i, abil in enumerate(ABILS):
-        with cols_mod[i % 4]:
-            st.session_state.modifiers[abil] = st.number_input(
-                f"{abil} 加算/減算", min_value=-30, max_value=30,
-                value=st.session_state.modifiers[abil], step=1, key=f"mod_{abil}"
-            )
+        st.markdown("**モディファイア（±）**")
+        cols_mod = st.columns(4)
+        for i, abil in enumerate(ABILS):
+            with cols_mod[i % 4]:
+                st.session_state.modifiers[abil] = st.number_input(
+                    f"{abil} 加算/減算", min_value=-30, max_value=30,
+                    value=st.session_state.modifiers[abil], step=1, key=f"mod_{abil}"
+                )
 
+        submitted = st.form_submit_button("まとめて振る（履歴に追加）", use_container_width=True)
+        if submitted:
+            newrecs = []
+            for _ in range(int(n_sets)):
+                base_vals, finals, detail, adds = {}, {}, {}, {}
+                for abil in ABILS:
+                    fixed = st.session_state.fixed_values[abil]
+                    if fixed is not None:
+                        base = fixed; d = []; add = 0
+                    else:
+                        base, d, add = roll_for(abil)
+                    base_vals[abil] = base
+                    detail[abil] = d
+                    adds[abil] = add
+                    finals[abil] = make_final(abil, base)
+                rec = make_record(finals, base_vals, detail, adds)
+                newrecs.append(rec)
+
+            # 履歴：その場で“まとめて前置” → 1回だけトリム
+            st.session_state.history[:0] = newrecs
+            maxk = max(5, int(st.session_state.history_max_keep))
+            if len(st.session_state.history) > maxk:
+                del st.session_state.history[maxk:]
+
+            # 自動★は新規分だけ判定して前置
+            favs = [r for r in newrecs if auto_fav_ok(r)]
+            if favs:
+                st.session_state.favorites[:0] = favs
+
+            st.success(f"{len(newrecs)} セットを履歴に追加（★ {len(favs)} 件）")
+
+    # ---- この下はフォームの外（設定UIは即時反映でOK）----
     st.markdown("---")
     st.subheader("履歴・★ 設定")
     st.session_state.history_max_keep = st.number_input("履歴の最大保持数", min_value=5, max_value=200, value=20, step=1)
@@ -184,51 +219,18 @@ with st.sidebar:
              key="auto_fav_mode", horizontal=True)
 
     st.caption("自動お気に入りの範囲条件（下限/上限）。空=0で未指定。対象：全能力・全派生・TOTAL")
-    # 表でまとめて編集（見やすく）
     cond_df = pd.DataFrame({
         "項目": ALL_KEYS_FOR_RULE,
         "下限": [st.session_state.auto_min[k] or 0 for k in ALL_KEYS_FOR_RULE],
         "上限": [st.session_state.auto_max[k] or 0 for k in ALL_KEYS_FOR_RULE],
     })
     edited_cond = st.data_editor(cond_df, use_container_width=True, num_rows="fixed", key="auto_cond_table")
-    # セッションへ反映
     for _, row in edited_cond.iterrows():
         k = row["項目"]
         lo = int(row["下限"]) if int(row["下限"]) != 0 else None
         hi = int(row["上限"]) if int(row["上限"]) != 0 else None
         st.session_state.auto_min[k] = lo
         st.session_state.auto_max[k] = hi
-
-    # --- サイドバー「まとめて振る（履歴に追加）」の処理を丸ごと差し替え ---
-    if st.button("まとめて振る（履歴に追加）", use_container_width=True):
-        newrecs = []
-        for _ in range(int(n_sets)):
-            base_vals, finals, detail, adds = {}, {}, {}, {}
-            for abil in ABILS:
-                fixed = st.session_state.fixed_values[abil]
-                if fixed is not None:
-                    base = fixed; d = []; add = 0
-                else:
-                    base, d, add = roll_for(abil)
-                base_vals[abil] = base
-                detail[abil] = d
-                adds[abil] = add
-                finals[abil] = make_final(abil, base)
-            rec = make_record(finals, base_vals, detail, adds)
-            newrecs.append(rec)
-
-        # 履歴に “その場で前置” してから一度だけ切り詰め
-        st.session_state.history[:0] = newrecs
-        maxk = max(5, int(st.session_state.history_max_keep))
-        if len(st.session_state.history) > maxk:
-            del st.session_state.history[maxk:]
-
-        # 自動お気に入りは新規分のみ判定 → まとめて前置
-        favs = [r for r in newrecs if auto_fav_ok(r)]
-        if favs:
-            st.session_state.favorites[:0] = favs
-
-        st.success(f"{len(newrecs)} セットを履歴に追加しました（★ {len(favs)} 件）")
 
 # =========================
 # 全体振り / 全体振り直し（履歴保存オプションあり）
@@ -255,7 +257,6 @@ def roll_all_into_current(save_to_history: bool):
 
     if save_to_history:
         rec = make_record(finals, base_vals, detail, adds)
-        # ← ここを in-place 前置に
         st.session_state.history.insert(0, rec)
         maxk = max(5, int(st.session_state.history_max_keep))
         if len(st.session_state.history) > maxk:
@@ -480,5 +481,5 @@ if st.session_state.favorites:
 else:
     st.info("★ は空です。履歴からチェック追加するか、自動お気に入りを使ってね。")
 
-# --- 履歴セクションの先頭など、件数のデバッグ表示を足すと確認しやすい（任意） ---
-st.caption(f"履歴件数: {len(st.session_state.history)} / お気に入り件数: {len(st.session_state.favorites)}")
+
+st.caption(f"履歴件数: {len(st.session_state.history)} / ★件数: {len(st.session_state.favorites)} / max_keep: {st.session_state.history_max_keep}")
