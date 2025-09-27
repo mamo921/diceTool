@@ -385,15 +385,17 @@ colL, colR = st.columns(2)
 
 # 左：入れ替え（独立フォームで1クリック即実行）
 with colL:
-    with st.form("swap_form", clear_on_submit=True):
+    with st.form("swap_form", clear_on_submit=False):
         swap_a = st.selectbox("入れ替え元", ABILS, index=0, key="swap_a")
         swap_b = st.selectbox("入れ替え先", ABILS, index=1, key="swap_b")
-        if st.form_submit_button("↔ 入れ替える", use_container_width=True):
+        submitted_swap = st.form_submit_button("↔ 入れ替える", use_container_width=True, key="btn_swap")
+        if submitted_swap:
             if swap_a == swap_b:
-                st.warning("同じ能力は入れ替えできません。")
+                st.session_state._toast = ("warn", "同じ能力は入れ替えできません。")
             else:
                 swap(swap_a, swap_b)
-                st.success(f"{swap_a} と {swap_b} を入れ替えました。")
+                st.session_state._toast = ("succ", f"{swap_a} と {swap_b} を入れ替えました。")
+            st.rerun()
 
 # 右：ポイント移動（独立フォームで1クリック即実行）
 with colR:
@@ -401,12 +403,19 @@ with colR:
         move_from = st.selectbox("減らす能力", ABILS, index=0, key="move_from")
         move_to   = st.selectbox("増やす能力", ABILS, index=1, key="move_to")
         move_x    = st.number_input("移動ポイント", min_value=1, max_value=50, value=1, step=1, key="move_x")
-        if st.form_submit_button("➕➖ 移動を実行", use_container_width=True):
+        submitted_move = st.form_submit_button("➕➖ 移動を実行", use_container_width=True, key="btn_move")
+        if submitted_move:
             if move_from == move_to:
-                st.warning("同じ能力へは移動できません。")
+                st.session_state._toast = ("warn", "同じ能力へは移動できません。")
             else:
                 move_points(move_from, move_to, int(move_x))
-                st.info(f"{move_from} -{move_x} / {move_to} +{move_x}（合計不変）")
+                st.session_state._toast = ("info", f"{move_from} -{move_x} / {move_to} +{move_x}（合計不変）")
+            st.rerun()
+
+# フォームでセットしたメッセージを次フレームで表示
+if "_toast" in st.session_state:
+    kind, msg = st.session_state.pop("_toast")
+    {"succ": st.success, "warn": st.warning, "info": st.info}[kind](msg)
 
 # 範囲警告（ベース値で評価）
 warns = []
