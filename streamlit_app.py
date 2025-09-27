@@ -157,6 +157,15 @@ def make_record(finals: Dict[str, int],
     }
     return rec
 
+def adopt_record(rec: Dict[str, Any]):
+    """履歴/★の1レコードを現在セットに展開して採用"""
+    finals = {a: int(rec[a]) for a in ABILS}
+    basev  = rec.get("_base", {a: finals[a] - (rec.get("_mods", {}).get(a, 0) if rec.get("_apply_mod", True) else 0) for a in ABILS})
+    st.session_state.current_stats  = finals
+    st.session_state.current_base   = basev
+    st.session_state.current_detail = rec.get("_detail", {a: [] for a in ABILS})
+    st.session_state.current_add    = rec.get("_adds", {a: 0 for a in ABILS})
+
 def auto_fav_ok(rec: Dict[str, Any]) -> bool:
     if not st.session_state.auto_fav_enabled:
         return False
@@ -485,6 +494,12 @@ if st.session_state.favorites:
     csv_bytes = fav_df_csv().to_csv(index=False).encode("utf-8")
     st.download_button("★ をCSVでダウンロード", data=csv_bytes, file_name="coc6_favorites.csv",
                        mime="text/csv", use_container_width=True)
+
+# ★から採用
+fid_pick = st.number_input("★ 採用 index", min_value=0, max_value=len(st.session_state.favorites)-1, value=0, step=1, key="fav_adopt_idx")
+if st.button("この★を現在セットに採用", use_container_width=True):
+    adopt_record(st.session_state.favorites[int(fid_pick)])
+    st.success("★を現在セットに採用しました。")
 
     del_idx = st.number_input("★ 削除 index", min_value=0, max_value=len(st.session_state.favorites)-1, value=0, step=1, key="fav_del_idx")
     cF1, cF2 = st.columns(2)
