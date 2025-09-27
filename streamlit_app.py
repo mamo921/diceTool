@@ -251,7 +251,7 @@ def render_status_tab():
         st.title("操作パネル")
 
         st.subheader("まとめて振る（履歴に追加）")
-        n_sets = st.number_input("セット数（最大5）", min_value=1, max_value=5, value=1, step=1)
+        n_sets = st.number_input("セット数（最大20）", min_value=1, max_value=20, value=1, step=1)
 
         st.markdown("**固定値の指定**（空=未指定）")
         cols_fix = st.columns(4)
