@@ -97,12 +97,6 @@ if "hist_selected_uids" not in st.session_state:
 if "fav_selected_uids" not in st.session_state:
     st.session_state.fav_selected_uids = set()
 
-# アクション処理用フラグ
-if "_pending_action" not in st.session_state:
-    st.session_state._pending_action = None
-if "_last_action_msg" not in st.session_state:
-    st.session_state._last_action_msg = ""
-
 # =========================
 # ヘッダ & グローバル設定
 # =========================
@@ -134,21 +128,6 @@ def roll_effective(abil: str) -> Tuple[int, List[int], int, int]:
     final = base + (st.session_state.modifiers[abil] if apply_mod else 0)
     return base, d, add, final
 
-# ===== スワップ/移動（関数は先に定義しておく） =====
-def swap(a: str, b: str):
-    cs = st.session_state.current_stats
-    cb_ = st.session_state.current_base
-    cd = st.session_state.current_detail
-    ca = st.session_state.current_add
-    cs[a], cs[b]   = cs[b], cs[a]
-    cb_[a], cb_[b] = cb_[b], cb_[a]
-    cd[a], cd[b]   = cd[b], cd[a]
-    ca[a], ca[b]   = ca[b], ca[a]
-
-def move_points(from_a: str, to_b: str, x: int):
-    st.session_state.current_stats[from_a] -= x
-    st.session_state.current_stats[to_b]   += x
-
 # モディファイア/適用トグルが変わったら現在セットを再計算
 def _recompute_current_from_mods():
     for abil in ABILS:
@@ -166,32 +145,7 @@ def _check_recompute_mods():
         st.session_state.prev_modifiers = dict(st.session_state.modifiers)
         st.session_state.prev_apply_mod = apply_mod
 
-# ====== ペンディングアクションを最初に処理（“前のボタンが走る”を防ぐ） ======
-def _process_pending_action():
-    act = st.session_state._pending_action
-    if not act:
-        return
-    msg = ""
-    if act["type"] == "swap":
-        a, b = act["a"], act["b"]
-        if a != b:
-            swap(a, b)
-            msg = f"{a} と {b} を入れ替えました。"
-        else:
-            msg = "同じ能力は入れ替えできません。"
-    elif act["type"] == "move":
-        f, t, x = act["from"], act["to"], int(act["x"])
-        if f != t:
-            move_points(f, t, x)
-            msg = f"{f} -{x} / {t} +{x}（合計不変）"
-        else:
-            msg = "同じ能力へは移動できません。"
-    st.session_state._pending_action = None
-    st.session_state._last_action_msg = msg
-
-# 先にモディファイア反映→アクション処理
 _check_recompute_mods()
-_process_pending_action()
 
 # =========================
 # レコード生成・★判定
@@ -409,30 +363,50 @@ with cols[-1]:
 st.markdown("---")
 
 # =========================
-# 出目入れ替え（イベントフラグ方式で誤発火ゼロ）
+# 出目入れ替え（スワップ） / xポイント移動 — フォームで即実行
 # =========================
 st.subheader("出目入れ替え（スワップ） / xポイント移動")
-if st.session_state._last_action_msg:
-    st.info(st.session_state._last_action_msg)
+
+def swap(a: str, b: str):
+    cs = st.session_state.current_stats
+    cb_ = st.session_state.current_base
+    cd = st.session_state.current_detail
+    ca = st.session_state.current_add
+    cs[a], cs[b]   = cs[b], cs[a]
+    cb_[a], cb_[b] = cb_[b], cb_[a]
+    cd[a], cd[b]   = cd[b], cd[a]
+    ca[a], ca[b]   = ca[b], ca[a]
+
+def move_points(from_a: str, to_b: str, x: int):
+    st.session_state.current_stats[from_a] -= x
+    st.session_state.current_stats[to_b]   += x
 
 colL, colR = st.columns(2)
 
-# 左：入れ替え（ボタンはフラグセットのみ）
+# 左：入れ替え（独立フォームで1クリック即実行）
 with colL:
-    st.selectbox("入れ替え元", ABILS, index=0, key="swap_a")
-    st.selectbox("入れ替え先", ABILS, index=1, key="swap_b")
-    if st.button("↔ 入れ替える", use_container_width=True, key="swap_btn"):
-        st.session_state._pending_action = {"type": "swap", "a": st.session_state.swap_a, "b": st.session_state.swap_b}
+    with st.form("swap_form", clear_on_submit=True):
+        swap_a = st.selectbox("入れ替え元", ABILS, index=0, key="swap_a")
+        swap_b = st.selectbox("入れ替え先", ABILS, index=1, key="swap_b")
+        if st.form_submit_button("↔ 入れ替える", use_container_width=True):
+            if swap_a == swap_b:
+                st.warning("同じ能力は入れ替えできません。")
+            else:
+                swap(swap_a, swap_b)
+                st.success(f"{swap_a} と {swap_b} を入れ替えました。")
 
-# 右：ポイント移動（ボタンはフラグセットのみ）
+# 右：ポイント移動（独立フォームで1クリック即実行）
 with colR:
-    st.selectbox("減らす能力", ABILS, index=0, key="move_from")
-    st.selectbox("増やす能力", ABILS, index=1, key="move_to")
-    st.number_input("移動ポイント", min_value=1, max_value=50, value=1, step=1, key="move_x")
-    if st.button("➕➖ 移動を実行", use_container_width=True, key="move_btn"):
-        st.session_state._pending_action = {
-            "type": "move", "from": st.session_state.move_from, "to": st.session_state.move_to, "x": st.session_state.move_x
-        }
+    with st.form("move_form", clear_on_submit=False):
+        move_from = st.selectbox("減らす能力", ABILS, index=0, key="move_from")
+        move_to   = st.selectbox("増やす能力", ABILS, index=1, key="move_to")
+        move_x    = st.number_input("移動ポイント", min_value=1, max_value=50, value=1, step=1, key="move_x")
+        if st.form_submit_button("➕➖ 移動を実行", use_container_width=True):
+            if move_from == move_to:
+                st.warning("同じ能力へは移動できません。")
+            else:
+                move_points(move_from, move_to, int(move_x))
+                st.info(f"{move_from} -{move_x} / {move_to} +{move_x}（合計不変）")
 
 # 範囲警告（ベース値で評価）
 warns = []
@@ -461,7 +435,7 @@ with cB:
     st.metric("SAN", deriv["SAN"])
     st.metric("幸運", deriv["幸運"])
 with cC:
-    st.metric("アイデア", deriv["アイデア"])
+    st.metric("アイデア", deriv["アイデア"})
     st.metric("知識", deriv["知識"])
 with cD:
     st.metric("職業P", deriv["職業P"])
