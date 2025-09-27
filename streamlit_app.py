@@ -160,6 +160,18 @@ def make_record(finals: Dict[str, int],
 def adopt_record(rec: Dict[str, Any]):
     """履歴/★の1レコードを現在セットに展開して採用"""
     finals = {a: int(rec[a]) for a in ABILS}
+    basev  = rec.get(
+        "_base",
+        {a: finals[a] - (rec.get("_mods", {}).get(a, 0) if rec.get("_apply_mod", True) else 0) for a in ABILS}
+    )
+    st.session_state.current_stats  = finals
+    st.session_state.current_base   = basev
+    st.session_state.current_detail = rec.get("_detail", {a: [] for a in ABILS})
+    st.session_state.current_add    = rec.get("_adds", {a: 0 for a in ABILS})
+
+def adopt_record(rec: Dict[str, Any]):
+    """履歴/★の1レコードを現在セットに展開して採用"""
+    finals = {a: int(rec[a]) for a in ABILS}
     basev  = rec.get("_base", {a: finals[a] - (rec.get("_mods", {}).get(a, 0) if rec.get("_apply_mod", True) else 0) for a in ABILS})
     st.session_state.current_stats  = finals
     st.session_state.current_base   = basev
@@ -477,39 +489,80 @@ with st.expander("履歴（並べ替え・採用・★チェック）", expanded
         st.info("履歴は空です。サイドバーや上部ボタンでロールしてください。")
 
 # =========================
-# お気に入り（★）
+# お気に入り（★） — 履歴と同等のチェックUI
 # =========================
 st.subheader("お気に入り（★）")
 if st.session_state.favorites:
-    df_fav = pd.DataFrame(st.session_state.favorites)
-    st.dataframe(df_fav[ABILS + ["TOTAL"] + DERIVED_KEYS], use_container_width=True, height=260)
+    # 並べ替え
+    sort_key_f = st.selectbox("並べ替え（★）", options=["TOTAL"] + DERIVED_KEYS + ABILS, index=0, key="fav_sort_key")
+    ascending_f = st.toggle("昇順（★）", value=False, key="fav_asc")
 
-    def fav_df_csv():
-        rows = []
-        for rec in st.session_state.favorites:
-            row = {k: rec.get(k, 0) for k in ABILS}
-            row.update({k: rec.get(k) for k in ["TOTAL"] + DERIVED_KEYS})
-            rows.append(row)
-        return pd.DataFrame(rows) if rows else pd.DataFrame()
-    csv_bytes = fav_df_csv().to_csv(index=False).encode("utf-8")
-    st.download_button("★ をCSVでダウンロード", data=csv_bytes, file_name="coc6_favorites.csv",
-                       mime="text/csv", use_container_width=True)
+    # DataFrame化（元リストのインデックス=安定IDを保持）
+    raw_fav = st.session_state.favorites
+    df_fav = pd.DataFrame(raw_fav)
+    df_fav["fid_idx"] = range(len(raw_fav))  # 元のインデックスを保持
 
-# ★から採用
-fid_pick = st.number_input("★ 採用 index", min_value=0, max_value=len(st.session_state.favorites)-1, value=0, step=1, key="fav_adopt_idx")
-if st.button("この★を現在セットに採用", use_container_width=True):
-    adopt_record(st.session_state.favorites[int(fid_pick)])
-    st.success("★を現在セットに採用しました。")
+    # ソート後ビューを作成
+    if sort_key_f in df_fav.columns:
+        df_fav_sorted = df_fav.sort_values(by=sort_key_f, ascending=ascending_f).reset_index(drop=True)
+    else:
+        df_fav_sorted = df_fav.reset_index(drop=True)
 
-    del_idx = st.number_input("★ 削除 index", min_value=0, max_value=len(st.session_state.favorites)-1, value=0, step=1, key="fav_del_idx")
-    cF1, cF2 = st.columns(2)
+    # 表示用カラムを整形（チェック列つき）
+    show_cols = ["fid_idx"] + ABILS + ["TOTAL"] + DERIVED_KEYS
+    show_cols = [c for c in show_cols if c in df_fav_sorted.columns]  # 念のため存在チェック
+    df_view_f = df_fav_sorted[show_cols].copy()
+    df_view_f.insert(0, "✓", False)
+
+    edited_f = st.data_editor(
+        df_view_f,
+        use_container_width=True,
+        height=360,
+        column_config={"fid_idx": st.column_config.NumberColumn("ID", disabled=True)},
+        key="fav_editor"
+    )
+
+    # チェックされた行の元インデックスを取得
+    selected_fids = [int(row["fid_idx"]) for _, row in edited_f.iterrows() if bool(row["✓"])]
+
+    cF1, cF2, cF3 = st.columns(3)
     with cF1:
-        if st.button("この★を削除", use_container_width=True):
-            st.session_state.favorites.pop(int(del_idx))
-            st.success("削除しました。")
+        if st.button("選択行を現在セットに採用", use_container_width=True):
+            if selected_fids:
+                # 複数チェックされていたら先頭の1件を採用
+                adopt_record(st.session_state.favorites[selected_fids[0]])
+                st.success("★から採用しました（先頭の1件）。")
+            else:
+                st.info("チェックがありません。")
+
     with cF2:
-        if st.button("★ を全削除", use_container_width=True, type="secondary"):
-            st.session_state.favorites.clear()
-            st.success("★ を空にしました。")
+        if st.button("選択行を★から削除", use_container_width=True):
+            if selected_fids:
+                # 元リストのインデックスなので逆順でpop
+                for idx in sorted(selected_fids, reverse=True):
+                    if 0 <= idx < len(st.session_state.favorites):
+                        st.session_state.favorites.pop(idx)
+                st.success(f"★から {len(selected_fids)} 件を削除しました。")
+            else:
+                st.info("チェックがありません。")
+
+    with cF3:
+        # エクスポート（既存のCSVを踏襲）
+        def fav_df_csv():
+            rows = []
+            for rec in st.session_state.favorites:
+                row = {k: rec.get(k, 0) for k in ABILS}
+                row.update({k: rec.get(k) for k in ["TOTAL"] + DERIVED_KEYS})
+                rows.append(row)
+            return pd.DataFrame(rows) if rows else pd.DataFrame()
+        csv_bytes = fav_df_csv().to_csv(index=False).encode("utf-8")
+        st.download_button("★ をCSVでダウンロード", data=csv_bytes, file_name="coc6_favorites.csv",
+                           mime="text/csv", use_container_width=True)
+
+    # 全削除ボタン（任意で残す）
+    if st.button("★ を全削除", use_container_width=True, type="secondary"):
+        st.session_state.favorites.clear()
+        st.success("★ を空にしました。")
+
 else:
     st.info("★ は空です。履歴からチェック追加するか、自動お気に入りを使ってね。")
