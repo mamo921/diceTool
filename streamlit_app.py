@@ -32,7 +32,7 @@ def roll_nd6(n: int) -> Tuple[int, List[int]]:
     return sum(dice), dice
 
 def roll_for(stat: str) -> Tuple[int, List[int], int]:
-    """戻り: (合計値=出目合計+固定加算, 出目配列, 固定加算)"""
+    """戻り: (素の合計=出目合計+固定加算, 出目配列, 固定加算)"""
     spec, add = ROLL_SPEC[stat]
     if spec.startswith("3d6"):
         s, dice = roll_nd6(3)
@@ -69,10 +69,10 @@ def total_score(stats: Dict[str, int]) -> int:
 # セッション初期化
 # =========================
 if "current_stats" not in st.session_state:
-    st.session_state.current_stats = {a: 0 for a in ABILS}     # 最終値（mod適用後/無効時はベース値）
-    st.session_state.current_base  = {a: 0 for a in ABILS}     # ベース値（出目合計+固定加算 or 固定値）
+    st.session_state.current_stats = {a: 0 for a in ABILS}     # 最終値（mod適用後/無効時は素のまま）
+    st.session_state.current_base  = {a: 0 for a in ABILS}     # 素の合計（出目合計+固定加算）
     st.session_state.current_detail= {a: [] for a in ABILS}    # 出目配列
-    st.session_state.current_add   = {a: 0 for a in ABILS}     # 固定加算（3d6=0, 2d6+6=6, 3d6+3=3）
+    st.session_state.current_add   = {a: 0 for a in ABILS}     # 固定加算
 
     st.session_state.modifiers     = {a: 0 for a in ABILS}
     st.session_state.fixed_values  = {a: None for a in ABILS}
@@ -80,7 +80,7 @@ if "current_stats" not in st.session_state:
     st.session_state.history       = []   # 最新が先頭
     st.session_state.favorites     = []
 
-    # 自動お気に入り設定
+    # 自動お気に入り設定（min/max をまとめて持つ）
     st.session_state.auto_fav_enabled = True
     st.session_state.auto_fav_mode    = "AND"
     st.session_state.auto_min         = {k: None for k in ALL_KEYS_FOR_RULE}
@@ -88,14 +88,6 @@ if "current_stats" not in st.session_state:
 
     st.session_state.history_max_keep = 20
     st.session_state.add_roll_to_history = True  # 全体ロールを履歴へ
-
-# ★/履歴のチェック保持＆安定ID
-if "uid_counter" not in st.session_state:
-    st.session_state.uid_counter = 0
-if "hist_selected_uids" not in st.session_state:
-    st.session_state.hist_selected_uids = set()
-if "fav_selected_uids" not in st.session_state:
-    st.session_state.fav_selected_uids = set()
 
 # =========================
 # ヘッダ & グローバル設定
@@ -105,50 +97,14 @@ st.title("STATUS　　　ALL（全能力を振る）")
 apply_mod = st.toggle(
     "モディファイアを最終値に適用する",
     value=True,
-    help="OFFで最終値にモディファイアを加算しません（ベース値のみ）。ONで最終値に加算します。"
+    help="OFFで最終値にモディファイアを加算しません（素の合計のみ）。ONで最終値に加算します。"
 )
 
 def make_final(abil: str, base_val: int) -> int:
     return base_val + (st.session_state.modifiers[abil] if apply_mod else 0)
 
-# 共通：固定値/ダイス/モディファイアをまとめて適用
-def roll_effective(abil: str) -> Tuple[int, List[int], int, int]:
-    """
-    戻り: base, detail, add, final
-      base   … 固定ありなら固定値、なければダイス合計(+固定加算済)
-      detail … 出目配列（固定時は []）
-      add    … 固定加算（3d6=0, 2d6+6=6, 3d6+3=3）
-      final  … base + (モディファイア or 0)
-    """
-    fixed = st.session_state.fixed_values.get(abil)
-    if fixed is not None:
-        base = int(fixed); d = []; add = 0
-    else:
-        base, d, add = roll_for(abil)
-    final = base + (st.session_state.modifiers[abil] if apply_mod else 0)
-    return base, d, add, final
-
-# モディファイア/適用トグルが変わったら現在セットを再計算
-def _recompute_current_from_mods():
-    for abil in ABILS:
-        base = st.session_state.current_base.get(abil, 0)
-        st.session_state.current_stats[abil] = base + (st.session_state.modifiers[abil] if apply_mod else 0)
-
-if "prev_modifiers" not in st.session_state:
-    st.session_state.prev_modifiers = dict(st.session_state.modifiers)
-if "prev_apply_mod" not in st.session_state:
-    st.session_state.prev_apply_mod = apply_mod
-
-def _check_recompute_mods():
-    if (st.session_state.prev_modifiers != st.session_state.modifiers) or (st.session_state.prev_apply_mod != apply_mod):
-        _recompute_current_from_mods()
-        st.session_state.prev_modifiers = dict(st.session_state.modifiers)
-        st.session_state.prev_apply_mod = apply_mod
-
-_check_recompute_mods()
-
 # =========================
-# レコード生成・★判定
+# 自動お気に入り判定 & 履歴追記
 # =========================
 def make_record(finals: Dict[str, int],
                 base_vals: Dict[str, int],
@@ -162,21 +118,7 @@ def make_record(finals: Dict[str, int],
         "_mods": dict(st.session_state.modifiers),
         "_apply_mod": apply_mod,
     }
-    # 安定ID付与（チェック保持用）
-    st.session_state.uid_counter += 1
-    rec["_uid"] = st.session_state.uid_counter
     return rec
-
-def adopt_record(rec: Dict[str, Any]):
-    """履歴/★の1レコードを現在セットに展開して採用"""
-    finals = {a: int(rec[a]) for a in ABILS}
-    basev  = rec.get("_base", {
-        a: finals[a] - (rec.get("_mods", {}).get(a, 0) if rec.get("_apply_mod", True) else 0) for a in ABILS
-    })
-    st.session_state.current_stats  = finals
-    st.session_state.current_base   = basev
-    st.session_state.current_detail = rec.get("_detail", {a: [] for a in ABILS})
-    st.session_state.current_add    = rec.get("_adds", {a: 0 for a in ABILS})
 
 def auto_fav_ok(rec: Dict[str, Any]) -> bool:
     if not st.session_state.auto_fav_enabled:
@@ -197,9 +139,11 @@ def auto_fav_ok(rec: Dict[str, Any]) -> bool:
 
 def history_append(rec: Dict[str, Any]):
     st.session_state.history.insert(0, rec)
+    # 最大件数で切り詰め
     maxk = int(st.session_state.history_max_keep)
     if len(st.session_state.history) > maxk:
         st.session_state.history = st.session_state.history[:maxk]
+    # 自動お気に入り
     if auto_fav_ok(rec):
         st.session_state.favorites.insert(0, rec)
 
@@ -240,12 +184,14 @@ with st.sidebar:
              key="auto_fav_mode", horizontal=True)
 
     st.caption("自動お気に入りの範囲条件（下限/上限）。空=0で未指定。対象：全能力・全派生・TOTAL")
+    # 表でまとめて編集（見やすく）
     cond_df = pd.DataFrame({
         "項目": ALL_KEYS_FOR_RULE,
         "下限": [st.session_state.auto_min[k] or 0 for k in ALL_KEYS_FOR_RULE],
         "上限": [st.session_state.auto_max[k] or 0 for k in ALL_KEYS_FOR_RULE],
     })
     edited_cond = st.data_editor(cond_df, use_container_width=True, num_rows="fixed", key="auto_cond_table")
+    # セッションへ反映
     for _, row in edited_cond.iterrows():
         k = row["項目"]
         lo = int(row["下限"]) if int(row["下限"]) != 0 else None
@@ -253,67 +199,51 @@ with st.sidebar:
         st.session_state.auto_min[k] = lo
         st.session_state.auto_max[k] = hi
 
-    # まとめて振る（履歴へ）
+    # その場処理で確実に動作
     if st.button("まとめて振る（履歴に追加）", use_container_width=True):
-        newrecs = []
         for _ in range(int(n_sets)):
             base_vals, finals, detail, adds = {}, {}, {}, {}
             for abil in ABILS:
-                base, d, add, final = roll_effective(abil)
+                fixed = st.session_state.fixed_values[abil]
+                if fixed is not None:
+                    base = fixed; d = []; add = 0
+                else:
+                    base, d, add = roll_for(abil)
                 base_vals[abil] = base
-                detail[abil]    = d
-                adds[abil]      = add
-                finals[abil]    = final
+                detail[abil] = d
+                adds[abil] = add
+                finals[abil] = make_final(abil, base)
             rec = make_record(finals, base_vals, detail, adds)
-            newrecs.append(rec)
-
-        # 履歴に前置 → トリム
-        st.session_state.history[:0] = newrecs
-        maxk = max(5, int(st.session_state.history_max_keep))
-        if len(st.session_state.history) > maxk:
-            del st.session_state.history[maxk:]
-
-        # 自動★は新規分だけ
-        favs = [r for r in newrecs if auto_fav_ok(r)]
-        if favs:
-            st.session_state.favorites[:0] = favs
-
-        st.success(f"{len(newrecs)} セットを履歴に追加しました（★ {len(favs)} 件）")
-
-    # サイドバーで値が変わった後にもう一度チェック（数値入力に追従）
-    _check_recompute_mods()
+            history_append(rec)
+        st.success(f"{int(n_sets)} セットを履歴に追加しました。")
 
 # =========================
-# 全体振り（履歴保存オプションあり）
+# 全体振り / 全体振り直し（履歴保存オプションあり）
 # =========================
 def roll_all_into_current(save_to_history: bool):
     base_vals, finals, detail, adds = {}, {}, {}, {}
     for abil in ABILS:
-        base, d, add, final = roll_effective(abil)
+        fixed = st.session_state.fixed_values[abil]
+        if fixed is not None:
+            base = fixed; d = []; add = 0
+        else:
+            base, d, add = roll_for(abil)
         st.session_state.current_base[abil]   = base
         st.session_state.current_detail[abil] = d
         st.session_state.current_add[abil]    = add
-        st.session_state.current_stats[abil]  = final
+        final_val = make_final(abil, base)
+        st.session_state.current_stats[abil]  = final_val
 
         base_vals[abil] = base
-        finals[abil]    = final
+        finals[abil]    = final_val
         detail[abil]    = d
         adds[abil]      = add
 
-    # レコードは常に作る（★判定のため）
-    rec = make_record(finals, base_vals, detail, adds)
-
-    # 履歴保存はトグルに従う
     if save_to_history:
-        st.session_state.history.insert(0, rec)
-        maxk = max(5, int(st.session_state.history_max_keep))
-        if len(st.session_state.history) > maxk:
-            del st.session_state.history[maxk:]
+        rec = make_record(finals, base_vals, detail, adds)
+        history_append(rec)
 
-    # ★は常に条件判定して自動追加
-    if auto_fav_ok(rec):
-        st.session_state.favorites.insert(0, rec)
-
+# 変更後（b2を削除してレイアウト調整）
 b1, b3 = st.columns([1,2])
 with b1:
     if st.button("🎲 全能力を振る", use_container_width=True):
@@ -321,6 +251,7 @@ with b1:
         st.success("現在セットを新規ロールしました。")
 with b3:
     st.caption("固定あり→固定値／固定なし→ダイス。履歴保存はトグルでON/OFF。最終値はモディファイア設定に従う。")
+
 
 st.markdown("---")
 
@@ -330,11 +261,15 @@ st.markdown("---")
 st.subheader("能力一覧（横並び）")
 
 def cb_reroll_one(abil: str):
-    base, d, add, final = roll_effective(abil)
+    fixed = st.session_state.fixed_values.get(abil)
+    if fixed is not None:
+        base = fixed; d = []; add = 0
+    else:
+        base, d, add = roll_for(abil)
     st.session_state.current_base[abil]   = base
     st.session_state.current_detail[abil] = d
     st.session_state.current_add[abil]    = add
-    st.session_state.current_stats[abil]  = final
+    st.session_state.current_stats[abil]  = make_final(abil, base)
 
 # 8能力＋TOTALで9列
 cols = st.columns(len(ABILS) + 1)
@@ -349,7 +284,9 @@ for i, abil in enumerate(ABILS):
             st.text(f"出目: [{', '.join(map(str, detail))}]" + (f" +{add}" if add else ""))
         else:
             st.text("出目: - (" + ("固定" if st.session_state.fixed_values.get(abil) is not None else "未振り") + ")")
+        base_val = st.session_state.current_base.get(abil, 0)
         final_val = st.session_state.current_stats.get(abil, 0)
+        st.text(f"素の合計: {base_val}")
         st.metric("最終値", final_val, help="モディファイア適用後（トグルでON/OFF）")
         st.button("🎲", key=f"reroll_{abil}", help=f"{abil} を振り直す",
                   use_container_width=True, on_click=cb_reroll_one, args=(abil,))
@@ -363,7 +300,7 @@ with cols[-1]:
 st.markdown("---")
 
 # =========================
-# 出目入れ替え（スワップ） / xポイント移動 — フォームで即実行
+# 出目入れ替え（スワップ） / xポイント移動（能力一覧の直後）
 # =========================
 st.subheader("出目入れ替え（スワップ） / xポイント移動")
 
@@ -381,46 +318,40 @@ def move_points(from_a: str, to_b: str, x: int):
     st.session_state.current_stats[from_a] -= x
     st.session_state.current_stats[to_b]   += x
 
-colL, colR = st.columns(2)
+c1, c2, c3, c4 = st.columns([1,1,1,1])
+with c1:
+    swap_a = st.selectbox("入れ替え元", ABILS, index=0)
+with c2:
+    swap_b = st.selectbox("入れ替え先", ABILS, index=1)
+with c3:
+    move_from = st.selectbox("減らす能力", ABILS, index=0)
+with c4:
+    move_to   = st.selectbox("増やす能力", ABILS, index=1)
 
-# 左：入れ替え（独立フォームで1クリック即実行）
-with colL:
-    with st.form("swap_form", clear_on_submit=True):
-        swap_a = st.selectbox("入れ替え元", ABILS, index=0, key="swap_a")
-        swap_b = st.selectbox("入れ替え先", ABILS, index=1, key="swap_b")
-        if st.form_submit_button("↔ 入れ替える", use_container_width=True):
-            if swap_a == swap_b:
-                st.warning("同じ能力は入れ替えできません。")
-            else:
-                swap(swap_a, swap_b)
-                st.success(f"{swap_a} と {swap_b} を入れ替えました。")
+c5, c6 = st.columns(2)
+with c5:
+    if st.button("↔ 入れ替える", use_container_width=True):
+        swap(swap_a, swap_b)
+        st.success(f"{swap_a} と {swap_b} を入れ替えました。")
+with c6:
+    move_x = st.number_input("移動ポイント", min_value=1, max_value=50, value=1, step=1)
+    if st.button("➕➖ 移動を実行", use_container_width=True):
+        move_points(move_from, move_to, int(move_x))
+        st.info(f"{move_from} -{move_x} / {move_to} +{move_x}（合計不変）")
 
-# 右：ポイント移動（独立フォームで1クリック即実行）
-with colR:
-    with st.form("move_form", clear_on_submit=False):
-        move_from = st.selectbox("減らす能力", ABILS, index=0, key="move_from")
-        move_to   = st.selectbox("増やす能力", ABILS, index=1, key="move_to")
-        move_x    = st.number_input("移動ポイント", min_value=1, max_value=50, value=1, step=1, key="move_x")
-        if st.form_submit_button("➕➖ 移動を実行", use_container_width=True):
-            if move_from == move_to:
-                st.warning("同じ能力へは移動できません。")
-            else:
-                move_points(move_from, move_to, int(move_x))
-                st.info(f"{move_from} -{move_x} / {move_to} +{move_x}（合計不変）")
-
-# 範囲警告（ベース値で評価）
+# 範囲警告（素の合計で評価）
 warns = []
 for k in ABILS:
     v = st.session_state.current_base.get(k, 0)
     if v < WARN_MIN[k] or v > WARN_MAX[k]:
-        warns.append(f"{k} が範囲外（{v} / 推奨 {WARN_MIN[k]}〜{WARN_MAX[k]}）")
+        warns.append(f"{k} が範囲外（素の合計 {v} / 推奨 {WARN_MIN[k]}〜{WARN_MAX[k]}）")
 if warns:
     st.warning(" / ".join(warns))
 
 st.markdown("---")
 
 # =========================
-# 派生ステータス
+# 派生ステータス（ここに移動）
 # =========================
 st.subheader("派生ステータス")
 finals_now = {a: st.session_state.current_stats[a] for a in ABILS}
@@ -435,7 +366,7 @@ with cB:
     st.metric("SAN", deriv["SAN"])
     st.metric("幸運", deriv["幸運"])
 with cC:
-    st.metric("アイデア", deriv["アイデア"})
+    st.metric("アイデア", deriv["アイデア"])
     st.metric("知識", deriv["知識"])
 with cD:
     st.metric("職業P", deriv["職業P"])
@@ -445,7 +376,7 @@ st.info(f"ダメージボーナス（STR+SIZ={finals_now['STR']+finals_now['SIZ'
 st.markdown("---")
 
 # =========================
-# 履歴（並べ替え・採用・★チェック保持）
+# 履歴（並べ替え・採用・★チェック）
 # =========================
 with st.expander("履歴（並べ替え・採用・★チェック）", expanded=False):
     if st.session_state.history:
@@ -453,114 +384,78 @@ with st.expander("履歴（並べ替え・採用・★チェック）", expanded
         ascending = st.toggle("昇順", value=False, key="hist_asc")
 
         df_hist = pd.DataFrame(st.session_state.history)
-        if "_uid" not in df_hist.columns:
-            df_hist["_uid"] = range(10_000, 10_000 + len(df_hist))
         df_hist = df_hist.sort_values(by=sort_key, ascending=ascending).reset_index(drop=True)
+        # 行ID（元 history のインデックス）を保持してマッピングのズレを防ぐ
+        df_hist["hid_idx"] = df_hist.index
 
-        cols_show = ["_uid"] + ABILS + ["TOTAL"] + DERIVED_KEYS
-        df_view = df_hist[cols_show].copy()
-        df_view.insert(0, "★チェック", df_view["_uid"].isin(st.session_state.hist_selected_uids))
+        df_view = df_hist[["hid_idx"] + ABILS + ["TOTAL"] + DERIVED_KEYS].copy()
+        df_view.insert(0, "★", False)  # チェック列
 
         edited = st.data_editor(
             df_view,
             use_container_width=True,
             height=380,
-            column_config={"_uid": st.column_config.NumberColumn("UID", disabled=True)},
+            column_config={"hid_idx": st.column_config.NumberColumn("ID", disabled=True)},
             key="hist_editor"
         )
-        st.session_state.hist_selected_uids = set(edited.loc[edited["★チェック"] == True, "_uid"].tolist())
 
-        idx = st.number_input("採用（履歴の先頭=0）", min_value=0, max_value=max(0, len(st.session_state.history)-1), value=0, step=1)
-        cH1, cH2, cH3 = st.columns(3)
+        # 採用
+        idx = st.number_input("採用 ID（上表のID）", min_value=0, max_value=int(df_hist["hid_idx"].max()), value=0, step=1)
+        def adopt(hid: int):
+            # 並べ替え後でもIDで history を参照できるように
+            target = st.session_state.history[hid]
+            finals = {a: int(target[a]) for a in ABILS}
+            basev  = target.get("_base", {a: finals[a] - (target.get("_mods", {}).get(a, 0) if target.get("_apply_mod", True) else 0) for a in ABILS})
+            st.session_state.current_stats  = finals
+            st.session_state.current_base   = basev
+            st.session_state.current_detail = target.get("_detail", {a: [] for a in ABILS})
+            st.session_state.current_add    = target.get("_adds", {a: 0 for a in ABILS})
+
+        cH1, cH2 = st.columns(2)
         with cH1:
             if st.button("このIDを現在セットに採用", use_container_width=True):
-                adopt_record(st.session_state.history[int(idx)])
+                adopt(int(idx))
         with cH2:
             if st.button("チェック行を★に追加", use_container_width=True):
+                # ★列 True の行を favorites へ（ID経由でhistoryから取り出す）
                 added = 0
-                uids = st.session_state.hist_selected_uids
-                for rec in st.session_state.history:
-                    if rec.get("_uid") in uids:
-                        st.session_state.favorites.insert(0, rec)
+                for _, row in edited.iterrows():
+                    if bool(row["★"]):
+                        hid = int(row["hid_idx"])
+                        st.session_state.favorites.insert(0, st.session_state.history[hid])
                         added += 1
                 st.success(f"★に追加：{added} 件")
-        with cH3:
-            if st.button("チェック先頭を現在セットに採用", use_container_width=True):
-                picked = next((r for r in st.session_state.history if r.get("_uid") in st.session_state.hist_selected_uids), None)
-                if picked:
-                    adopt_record(picked)
-                    st.success("チェック先頭の1件を採用しました。")
-                else:
-                    st.info("チェックがありません。")
     else:
         st.info("履歴は空です。サイドバーや上部ボタンでロールしてください。")
 
 # =========================
-# お気に入り（★） — 履歴風UI（チェック保持・採用・削除）
+# お気に入り（★）
 # =========================
 st.subheader("お気に入り（★）")
 if st.session_state.favorites:
     df_fav = pd.DataFrame(st.session_state.favorites)
-    if "_uid" not in df_fav.columns:
-        df_fav["_uid"] = range(20_000, 20_000 + len(df_fav))
+    st.dataframe(df_fav[ABILS + ["TOTAL"] + DERIVED_KEYS], use_container_width=True, height=260)
 
-    sort_key_f = st.selectbox("並べ替え（★）", options=["TOTAL"] + DERIVED_KEYS + ABILS, index=0, key="fav_sort_key")
-    ascending_f = st.toggle("昇順（★）", value=False, key="fav_asc")
+    def fav_df_csv():
+        rows = []
+        for rec in st.session_state.favorites:
+            row = {k: rec.get(k, 0) for k in ABILS}
+            row.update({k: rec.get(k) for k in ["TOTAL"] + DERIVED_KEYS})
+            rows.append(row)
+        return pd.DataFrame(rows) if rows else pd.DataFrame()
+    csv_bytes = fav_df_csv().to_csv(index=False).encode("utf-8")
+    st.download_button("★ をCSVでダウンロード", data=csv_bytes, file_name="coc6_favorites.csv",
+                       mime="text/csv", use_container_width=True)
 
-    if sort_key_f in df_fav.columns:
-        df_fav = df_fav.sort_values(by=sort_key_f, ascending=ascending_f).reset_index(drop=True)
-
-    cols_show_f = ["_uid"] + ABILS + ["TOTAL"] + DERIVED_KEYS
-    df_view_f = df_fav[cols_show_f].copy()
-    df_view_f.insert(0, "✓", df_view_f["_uid"].isin(st.session_state.fav_selected_uids))
-
-    edited_f = st.data_editor(
-        df_view_f,
-        use_container_width=True,
-        height=360,
-        column_config={"_uid": st.column_config.NumberColumn("UID", disabled=True)},
-        key="fav_editor"
-    )
-    st.session_state.fav_selected_uids = set(edited_f.loc[edited_f["✓"] == True, "_uid"].tolist())
-
-    cF1, cF2, cF3 = st.columns(3)
+    del_idx = st.number_input("★ 削除 index", min_value=0, max_value=len(st.session_state.favorites)-1, value=0, step=1, key="fav_del_idx")
+    cF1, cF2 = st.columns(2)
     with cF1:
-        if st.button("選択行を現在セットに採用", use_container_width=True):
-            picked = next((rec for rec in st.session_state.favorites if rec.get("_uid") in st.session_state.fav_selected_uids), None)
-            if picked:
-                adopt_record(picked)
-                st.success("★から採用しました。")
-            else:
-                st.info("チェックがありません。")
-
+        if st.button("この★を削除", use_container_width=True):
+            st.session_state.favorites.pop(int(del_idx))
+            st.success("削除しました。")
     with cF2:
-        if st.button("選択行を★から削除", use_container_width=True):
-            if st.session_state.fav_selected_uids:
-                st.session_state.favorites = [
-                    rec for rec in st.session_state.favorites
-                    if rec.get("_uid") not in st.session_state.fav_selected_uids
-                ]
-                st.session_state.fav_selected_uids.clear()
-                st.success("選択した★を削除しました。")
-            else:
-                st.info("チェックがありません。")
-
-    with cF3:
-        # CSVエクスポート
-        def fav_df_csv():
-            rows = []
-            for rec in st.session_state.favorites:
-                row = {k: rec.get(k, 0) for k in ABILS}
-                row.update({k: rec.get(k) for k in ["TOTAL"] + DERIVED_KEYS})
-                rows.append(row)
-            return pd.DataFrame(rows) if rows else pd.DataFrame()
-        csv_bytes = fav_df_csv().to_csv(index=False).encode("utf-8")
-        st.download_button("★ をCSVでダウンロード", data=csv_bytes, file_name="coc6_favorites.csv",
-                           mime="text/csv", use_container_width=True)
-
-    if st.button("★ を全削除", use_container_width=True, type="secondary"):
-        st.session_state.favorites.clear()
-        st.session_state.fav_selected_uids.clear()
-        st.success("★ を空にしました。")
+        if st.button("★ を全削除", use_container_width=True, type="secondary"):
+            st.session_state.favorites.clear()
+            st.success("★ を空にしました。")
 else:
     st.info("★ は空です。履歴からチェック追加するか、自動お気に入りを使ってね。")
